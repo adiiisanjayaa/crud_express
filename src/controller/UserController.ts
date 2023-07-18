@@ -1,67 +1,127 @@
 import { AppDataSource } from "../data-source"
 import { NextFunction, Request, Response } from "express"
 import { User } from "../entity/User"
+import { validate } from "class-validator";
 
 export class UserController {
 
-    private userRepository = AppDataSource.getRepository(User)
-
     //get all users
-    async all(request: Request, response: Response, next: NextFunction) {
-        return this.userRepository.find()
+    static async all(req: Request, res: Response, next: NextFunction) {
+        let userRepository = AppDataSource.getRepository(User);
+        const users = await userRepository.find({
+            select: ["id", "username", "role"] //We dont want to send the passwords on response
+        });
+    
+        //Send the users object
+        res.send(users);
     }
 
     //get user by id
-    async one(request: Request, response: Response, next: NextFunction) {
-        const id = parseInt(request.params.id)
-        const user = await this.userRepository. findOne({
-            where: { id }
-        })
+    static async getOneById(req: Request, res: Response, next: NextFunction) {
+        //Get the ID from the url
+        const id: number = req.params.id;
 
-        if (!user) {
-            throw Error("unregistered user")
+       try {
+        let userRepository = AppDataSource.getRepository(User);
+        const user = await userRepository.findOneOrFail({
+            where:{id},
+            select: ["id", "username", "role"] //We dont want to send the password on response
+        });
+        res.send(user);
+        } catch (error) {
+        res.status(404).send("User not found");
         }
-        return user
     }
 
     //save user
-    async save(request: Request, response: Response, next: NextFunction) {
-        const { name, email } = request.body;
-        const user = Object.assign(new User(), {
-            name,
-            email
-        })
+    static async save(req: Request, res: Response, next: NextFunction) {
+        //Get parameters from the body
+        let { username, password, role } = req.body;
+        let user = new User();
+        user.username = username;
+        user.password = password;
+        user.role = role;
 
-        return this.userRepository.save(user)
+        //Validade if the parameters are ok
+        const errors = await validate(user);
+        if (errors.length > 0) {
+            res.status(400).send(errors);
+            return;
+        }
+
+        //Hash the password, to securely store on DB
+        user.hashPassword();
+
+        //Try to save. If fails, the username is already 
+        try {
+            let userRepository = AppDataSource.getRepository(User);
+            await userRepository.save(user);
+        } catch (e) {
+            res.status(409).send("Username already in use");
+            return;
+        }
+
+        //If all ok, send 201 response
+        res.status(201).send("User created");
     }
 
     //update user
-    async update(request: Request, response: Response, next: NextFunction) {
-        const id = parseInt(request.params.id)
-        const { name, email } = request.body;
-        const data = Object.assign(new User(), {
-            name,
-            email
-        })
+    static async update(req: Request, res: Response, next: NextFunction) {
+        //Get the ID from the url
+        const id = req.params.id;
 
-        const user = await this.userRepository.update(id, data)
-        if (!user) {
-            throw Error("unregistered user")
+        //Get values from the body
+        const { username, role } = req.body;
+
+        //Try to find user on database
+        let user;
+        try {
+            let userRepository = AppDataSource.getRepository(User);
+            user = await userRepository.findOneOrFail(id);
+        } catch (error) {
+            //If not found, send a 404 response
+            res.status(404).send("User not found");
+            return;
         }
-        return user
+
+        //Validate the new values on model
+        user.username = username;
+        user.role = role;
+        const errors = await validate(user);
+        if (errors.length > 0) {
+            res.status(400).send(errors);
+            return;
+        }
+
+        //Try to safe, if fails, that means username already in use
+        try {
+            let userRepository = AppDataSource.getRepository(User);
+            await userRepository.save(user);
+        } catch (e) {
+            res.status(409).send("username already in use");
+            return;
+        }
+        //After all send a 204 (no content, but accepted) response
+        res.status(204).send();
     }
 
     //remove user by id
-    async remove(request: Request, response: Response, next: NextFunction) {
-        const id = parseInt(request.params.id)
-        const userToRemove = await this.userRepository.findOneBy({ id })
+    static async remove(req: Request, res: Response, next: NextFunction) {
+        //Get the ID from the url
+        const id = req.params.id;
+        let userRepository = AppDataSource.getRepository(User);
 
-        if (!userToRemove) {
-            throw Error("This user not exist")
+        let user: User;
+        try {
+            user = await userRepository.findOneOrFail(id);
+        } catch (error) {
+            res.status(404).send("User not found");
+            return;
         }
+        userRepository.delete(id);
 
-        await this.userRepository.remove(userToRemove)
-        return "User has been removed"
+        //After all send a 204 (no content, but accepted) response
+        res.status(204).send();
     }
 
 }
